@@ -1,4 +1,10 @@
-interface Env { TUNER_KV: KVNamespace; }
+export interface Env {
+  TUNER_KV: KVNamespace;
+  VESSEL_LIST?: string;
+  PRIORITY_VESSEL_LIST?: string;
+  GITHUB_ORG?: string;
+  DOMAIN_SUFFIX?: string;
+}
 
 const CSP: Record<string, string> = { 'default-src': "'self'", 'script-src': "'self' 'unsafe-inline' 'unsafe-eval'", 'style-src': "'self' 'unsafe-inline'", 'img-src': "'self' data: https:", 'connect-src': "'self' https://*.casey-digennaro.workers.dev https://*" };
 
@@ -7,7 +13,7 @@ function json(data: unknown, s = 200) { return new Response(JSON.stringify(data)
 interface VesselScore { name: string; url: string; health: number; latency: number; size: number; hasVesselJson: boolean; hasCsp: boolean; hasSecurity: boolean; score: number; issues: string[]; ts: string; }
 interface ScanResult { id: string; vessels: VesselScore[]; total: number; pass: number; fail: number; topIssues: string[]; ts: string; }
 
-const VESSELS = [
+const DEFAULT_VESSELS = [
   'cocapn-ai','dmlog-ai','studylog-ai','makerlog-ai','personallog-ai','businesslog-ai',
   'fishinglog-ai','deckboss-ai','capitaine','the-fleet','ideation-engine','dogmind-arena',
   'fleet-rpg','fleet-orchestrator','dead-reckoning-engine','git-agent','git-claw',
@@ -23,62 +29,67 @@ const VESSELS = [
   'actualizer-ai','dream-engine','seed-ui','local-bridge','membership-api'
 ];
 
-async function checkVessel(name: string): Promise<VesselScore> {
-  const url = `https://${name}.casey-digennaro.workers.dev`;
-  const rawUrl = `https://raw.githubusercontent.com/Lucineer/${name}/master`;
+const DEFAULT_PRIORITY = ['dmlog-ai','the-fleet','cocapn-ai','capitaine','ideation-engine','deckboss-ai','studylog-ai','makerlog-ai','personallog-ai','businesslog-ai'];
+
+function parseList(value: string | undefined, fallback: string[]): string[] {
+  if (!value) return fallback;
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function githubOrg(env: Env): string { return env.GITHUB_ORG || 'Lucineer'; }
+function domainSuffix(env: Env): string { return env.DOMAIN_SUFFIX || 'casey-digennaro.workers.dev'; }
+
+async function fetchRepoFile(name: string, env: Env, path: string): Promise<Response | null> {
+  const org = githubOrg(env);
+  for (const branch of ['master', 'main']) {
+    try {
+      const resp = await fetch(`https://raw.githubusercontent.com/${org}/${name}/${branch}/${path}`, { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) return resp;
+    } catch {}
+  }
+  return null;
+}
+
+async function checkVessel(name: string, env: Env): Promise<VesselScore> {
+  const url = `https://${name}.${domainSuffix(env)}`;
   const issues: string[] = [];
   let health = 0, latency = 9999, size = 0, hasVesselJson = false, hasCsp = false, hasSecurity = false;
 
   // Stage 1: Health (GitHub primary due to CF error 1042 on same-subdomain)
   const t0 = Date.now();
-  let repoExists = false;
-  for (const branch of ['master', 'main']) {
-    try {
-      const resp = await fetch(`https://raw.githubusercontent.com/Lucineer/${name}/${branch}/src/worker.ts`, { signal: AbortSignal.timeout(8000) });
-      if (resp.ok) { repoExists = true; latency = Date.now() - t0; break; }
-    } catch {}
-  }
-  if (repoExists) { health = 200; }
-  else { health = 404; issues.push('repo not found on GitHub'); }
-
-  // Stage 2: Bundle size (from GitHub)
-  if (repoExists) {
-    try {
-      const resp = await fetch(`https://raw.githubusercontent.com/Lucineer/${name}/master/src/worker.ts`, { signal: AbortSignal.timeout(8000) });
-      if (!resp.ok) await fetch(`https://raw.githubusercontent.com/Lucineer/${name}/main/src/worker.ts`, { signal: AbortSignal.timeout(8000) });
-      const body = await resp.text();
-      size = body.length;
-      if (size > 80000) issues.push(`worker.ts ${Math.round(size / 1024)}KB — consider splitting`);
-    } catch {}
+  const healthResp = await fetchRepoFile(name, env, 'src/worker.ts');
+  let workerBody = '';
+  if (healthResp) {
+    health = 200;
+    latency = Date.now() - t0;
+    workerBody = await healthResp.text();
+    size = workerBody.length;
+    if (size > 80000) issues.push(`worker.ts ${Math.round(size / 1024)}KB — consider splitting`);
+  } else {
+    health = 404;
+    issues.push('repo not found on GitHub');
   }
 
-  // Stage 3: vessel.json (from GitHub)
-  for (const branch of ['master', 'main']) {
+  // Stage 2: vessel.json (from GitHub)
+  const vesselResp = await fetchRepoFile(name, env, 'vessel.json');
+  if (vesselResp) {
     try {
-      const resp = await fetch(`https://raw.githubusercontent.com/Lucineer/${name}/${branch}/vessel.json`, { signal: AbortSignal.timeout(8000) });
-      if (resp.ok) {
-        const data = await resp.json() as Record<string, unknown>;
-        hasVesselJson = true;
-        if (!data.name) issues.push('vessel.json missing name');
-        if (!data.capabilities) issues.push('vessel.json missing capabilities');
-        break;
-      }
+      const data = await vesselResp.json() as Record<string, unknown>;
+      hasVesselJson = true;
+      if (!data.name) issues.push('vessel.json missing name');
+      if (!data.capabilities) issues.push('vessel.json missing capabilities');
     } catch {}
+  } else {
+    issues.push('vessel.json missing');
   }
-  if (!hasVesselJson) issues.push('vessel.json missing');
 
-  // Stage 4: Security (check worker.ts for CSP pattern)
-  if (repoExists) {
-    try {
-      const resp = await fetch(`https://raw.githubusercontent.com/Lucineer/${name}/master/src/worker.ts`, { signal: AbortSignal.timeout(8000) });
-      if (!resp.ok) await fetch(`https://raw.githubusercontent.com/Lucineer/${name}/main/src/worker.ts`, { signal: AbortSignal.timeout(8000) });
-      const body = await resp.text();
-      const lower = body.toLowerCase();
-      hasCsp = lower.includes('content-security-policy');
-      if (!hasCsp) issues.push('no CSP in worker.ts');
-      hasSecurity = lower.includes('x-frame-options') || lower.includes("frame-ancestors");
-      if (!hasSecurity) issues.push('no X-Frame-Options');
-    } catch {}
+  // Stage 3: Security (check worker.ts for CSP pattern)
+  if (workerBody) {
+    const lower = workerBody.toLowerCase();
+    hasCsp = lower.includes('content-security-policy');
+    if (!hasCsp) issues.push('no CSP in worker.ts');
+    hasSecurity = lower.includes('x-frame-options') || lower.includes("frame-ancestors");
+    if (!hasSecurity) issues.push('no X-Frame-Options');
   }
 
   // Score calculation (weighted)
@@ -174,11 +185,12 @@ renderResults({vessels:sorted});}
 </div></body></html>`;
 }
 
-const PRIORITY_VESSELS = ['dmlog-ai','the-fleet','cocapn-ai','capitaine','ideation-engine','deckboss-ai','studylog-ai','makerlog-ai','personallog-ai','businesslog-ai'];
-
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    const vessels = parseList(env.VESSEL_LIST, DEFAULT_VESSELS);
+    const priorityVessels = parseList(env.PRIORITY_VESSEL_LIST, DEFAULT_PRIORITY);
+
     if (url.pathname === '/health') return json({ status: 'ok', vessel: 'vessel-tuner' });
     if (url.pathname === '/vessel.json') return json({ name: 'vessel-tuner', type: 'cocapn-vessel', version: '1.0.0', description: 'AutoKernel for the fleet — profile, benchmark, optimize', fleet: 'https://the-fleet.casey-digennaro.workers.dev', capabilities: ['fleet-profiling', 'correctness-harness', 'optimization-scoring'] });
 
@@ -189,17 +201,17 @@ export default {
 
     if (url.pathname === '/api/scan') {
       const priority = url.searchParams.get('priority') === 'true';
-      const targets = priority ? PRIORITY_VESSELS : VESSELS;
+      const targets = priority ? priorityVessels : vessels;
       const results: VesselScore[] = [];
 
       // Scan in batches of 5 (CF Workers free tier limits)
       for (let i = 0; i < targets.length; i += 5) {
         const batch = targets.slice(i, i + 5);
-        const batchResults = await Promise.all(batch.map(name => checkVessel(name).catch(() => ({
-          name, url: `https://${name}.casey-digennaro.workers.dev`,
+        const batchResults = await Promise.all(batch.map(name => checkVessel(name, env).catch(() => ({
+          name, url: `https://${name}.${domainSuffix(env)}`,
           health: 0, latency: 10000, size: 0, hasVesselJson: false, hasCsp: false, hasSecurity: false,
           score: 0, issues: ['scan failed'], ts: new Date().toISOString()
-        }) as Promise<VesselScore>)));
+        }) as VesselScore)));
         results.push(...batchResults);
       }
 
@@ -219,7 +231,7 @@ export default {
 
     if (url.pathname === '/api/vessel' && url.searchParams.get('name')) {
       const name = url.searchParams.get('name')!;
-      const result = await checkVessel(name);
+      const result = await checkVessel(name, env);
       return json(result);
     }
 

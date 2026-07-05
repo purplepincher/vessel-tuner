@@ -2,6 +2,13 @@ name = "vessel-tuner"
 main = "src/worker.ts"
 compatibility_date = "2024-01-01"
 account_id = "049ff5e84ecf636b53b162cbb580aae6"
+
+[vars]
+GITHUB_ORG = "Lucineer"
+DOMAIN_SUFFIX = "casey-digennaro.workers.dev"
+VESSEL_LIST = "cocapn-ai,dmlog-ai,studylog-ai,makerlog-ai,personallog-ai,businesslog-ai,fishinglog-ai,deckboss-ai,capitaine,the-fleet,ideation-engine,dogmind-arena,fleet-rpg,fleet-orchestrator,dead-reckoning-engine,git-agent,git-claw,log-origin,skill-evolver,flow-forge,context-compactor,fleet-immune,epiphany-engine,loop-closure,swarm-intuition,meta-loop-evolver,clawcommit-lucid,fleet-identity,collective-mind,emergence-bus,context-broker,cocapn-lite,the-seed,become-ai,nexus-git-agent,self-evolve-ai,cocapn-com,luciddreamer-ai,edgenative-ai,increments-fleet-trust,cooklog-ai,booklog-ai,travlog-ai,healthlog-ai,petlog-ai,parentlog-ai,doclog-ai,musiclog-ai,artistlog-ai,activelog-ai,activeledger-ai,reallog-ai,playerlog-ai,cocapn-press,kungfu-ai,mycelium-ai,baton-ai,crdt-sync,personality-engine,actualizer-ai,dream-engine,seed-ui,local-bridge,membership-api"
+PRIORITY_VESSEL_LIST = "dmlog-ai,the-fleet,cocapn-ai,capitaine,ideation-engine,deckboss-ai,studylog-ai,makerlog-ai,personallog-ai,businesslog-ai"
+
 [[kv_namespaces]]
 binding = "TUNER_KV"
 id = "aa9255d1c8df4de38ef960e67283a6d6"
