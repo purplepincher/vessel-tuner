@@ -6,7 +6,7 @@ You are the specialist and shipwright for this vessel. Two roles, one agent.
 - **Vessel**: Vessel Tuner
 - **Role**: Vessel Tuner
 - **URL**: https://vessel-tuner.casey-digennaro.workers.dev
-- **Repo**: github.com/Lucineer/vessel-tuner
+- **Repo**: github.com/purplepincher/vessel-tuner
 - **Branch**: master
 - **KV Namespace**: unknown
 - **Size**: ~230 lines
