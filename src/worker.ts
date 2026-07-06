@@ -147,7 +147,7 @@ select{background:#0a0a0f;color:#e0e0e0;border:1px solid #2a2a3a;padding:6px;bor
 <div id="topIssues" class="card" style="display:none"><h3>Top Fleet Issues</h3><div id="issueList"></div></div>
 <script>
 let allResults=null;
-async function scanFleet(){document.getElementById('scanStatus').textContent='Scanning 90 vessels...';
+async function scanFleet(){document.getElementById('scanStatus').textContent='Scanning fleet...';
 document.getElementById('progressBar').style.display='block';document.getElementById('progressFill').style.width='0%';
 const r=await fetch('/api/scan');const data=await r.json();
 if(data.error){document.getElementById('scanStatus').textContent=data.error;return;}
