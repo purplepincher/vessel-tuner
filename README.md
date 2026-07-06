@@ -1,57 +1,149 @@
 # Vessel Tuner
 
-Vessel Tuner is a single Cloudflare Worker that scans a fleet of Workers from the outside, scoring each on GitHub repository health, fetch latency, bundle size, the presence of a `vessel.json` spec, and basic security header patterns (CSP and X-Frame-Options / frame-ancestors). It stores only the most recent scan result in Cloudflare KV and serves a small HTML dashboard.
+A single Cloudflare Worker that scans a fleet of Workers from the outside, scores each one on repository health, source size, `vessel.json` spec compliance, and security-header patterns, stores only the latest result in Cloudflare KV, and serves a small HTML dashboard.
 
-**Live Example:** [vessel-tuner.casey-digennaro.workers.dev](https://vessel-tuner.casey-digennaro.workers.dev)
+**Live example:** [vessel-tuner.casey-digennaro.workers.dev](https://vessel-tuner.casey-digennaro.workers.dev)
 
-## Quick Start
-
-1.  **Fork** this repository.
-2.  Run `npm install` and `npm test` to verify the local harness.
-3.  Deploy to Cloudflare Workers with `wrangler deploy`.
-4.  Configure your fleet without editing source code by setting Worker vars (in `wrangler.toml` or via the Cloudflare dashboard):
-    -   `VESSEL_LIST` — comma-separated vessel names to scan.
-    -   `PRIORITY_VESSEL_LIST` — comma-separated subset used by the "Priority 10 Only" scan.
-    -   `GITHUB_ORG` — GitHub organization or user that owns the repositories (default: `Lucineer`).
-    -   `DOMAIN_SUFFIX` — domain suffix used to build live URLs (default: `casey-digennaro.workers.dev`).
-5.  Visit `/` to open the dashboard and hit **Scan Fleet**.
-
-## Demo
+## Quickstart
 
 ```bash
-# Run the test harness locally
+git clone https://github.com/purplepincher/vessel-tuner.git
+cd vessel-tuner
 npm install
 npm test
-
-# Deploy
-wrangler deploy
-
-# Health check
-curl https://<your-worker>.workers.dev/health
-
-# Scan a single vessel
-curl "https://<your-worker>.workers.dev/api/vessel?name=<vessel-name>"
-
-# Scan the full fleet
-curl https://<your-worker>.workers.dev/api/scan
-
-# Retrieve the most recent stored scan
-curl https://<your-worker>.workers.dev/api/scan/latest
+npx wrangler deploy
 ```
 
-## What it does
+Then open `https://<your-worker>.workers.dev/` and click **Scan Fleet**.
 
--   Fetches each vessel's `src/worker.ts` and `vessel.json` from GitHub, trying `master` then `main`.
--   Scans vessels in batches of 5 to stay within the Cloudflare Workers free-tier subrequest limit.
--   Scores each vessel 0–100 based on health, latency, bundle size, spec compliance, and security patterns.
--   Aggregates the most common issues across the fleet.
--   Stores only the latest scan result in KV (`latest_scan`).
+The dashboard calls `/api/scan` and displays the full fleet table, or `/api/scan?priority=true` for the priority list.
 
-## What it does not do
+## Usage
 
--   It does not retain a history of scans; only the most recent result is kept in KV.
--   It does not perform an HSTS header check.
--   It does not measure latency from multiple global regions — latency is measured from the single Cloudflare region where the Worker runs.
--   It does not bypass GitHub rate limits; frequent scans of many repositories may need a token.
+Run the test harness:
 
-<div style="text-align:center;padding:16px;color:#64748b;font-size:.8rem"><a href="https://the-fleet.casey-digennaro.workers.dev" style="color:#64748b">The Fleet</a> &middot; <a href="https://cocapn.ai" style="color:#64748b">Cocapn</a></div>
+```bash
+npm test
+```
+
+```
+✓ src/worker.test.ts (6 tests) 21ms
+
+Test Files  1 passed (1)
+     Tests  6 passed (6)
+```
+
+Health check:
+
+```bash
+curl https://vessel-tuner.casey-digennaro.workers.dev/health
+```
+
+```json
+{"status":"ok","vessel":"vessel-tuner"}
+```
+
+Scan a single vessel:
+
+```bash
+curl "https://vessel-tuner.casey-digennaro.workers.dev/api/vessel?name=vessel-tuner"
+```
+
+```json
+{
+  "name": "vessel-tuner",
+  "url": "https://vessel-tuner.casey-digennaro.workers.dev",
+  "health": 200,
+  "latency": 140,
+  "size": 15875,
+  "hasVesselJson": true,
+  "hasCsp": true,
+  "hasSecurity": true,
+  "score": 98,
+  "issues": ["vessel.json missing capabilities"],
+  "ts": "2026-07-06T19:39:53.542Z"
+}
+```
+
+Scan the full fleet:
+
+```bash
+curl https://vessel-tuner.casey-digennaro.workers.dev/api/scan
+```
+
+Scan only the priority vessels:
+
+```bash
+curl "https://vessel-tuner.casey-digennaro.workers.dev/api/scan?priority=true"
+```
+
+Retrieve the most recently stored scan:
+
+```bash
+curl https://vessel-tuner.casey-digennaro.workers.dev/api/scan/latest
+```
+
+## How it works
+
+Everything lives in `src/worker.ts`.
+
+- `GET /` returns a small HTML dashboard that fetches `/api/scan` and renders the results.
+- `GET /health` returns a liveness JSON payload.
+- `GET /vessel.json` returns the worker's own fleet metadata.
+- `GET /api/scan` scans every configured vessel in batches of 5 (the size keeps the Worker inside the Cloudflare free-tier subrequest limit).
+- `GET /api/scan?priority=true` scans only the priority list.
+- `GET /api/scan/latest` returns the last stored scan from KV.
+- `GET /api/vessel?name=<vessel-name>` scans one vessel on demand.
+
+For each vessel the worker tries `master` then `main` on `raw.githubusercontent.com` and pulls `src/worker.ts` and `vessel.json`. From the fetched files it records:
+
+- **health** — the HTTP status of the `src/worker.ts` fetch (`200` if found, `404` if not).
+- **latency** — milliseconds to fetch `src/worker.ts` from GitHub raw. This is *not* the vessel's live HTTP latency: a Worker cannot directly fetch a sibling Worker on the same `workers.dev` subdomain (Cloudflare error 1042), so the tuner fetches the source from GitHub instead and times that.
+- **size** — byte length of `src/worker.ts` (the source file, not a built bundle).
+- **hasVesselJson** — whether a parseable `vessel.json` is present and contains `name` and `capabilities`.
+- **security patterns** — whether the `worker.ts` source contains the strings `content-security-policy`, `x-frame-options`, or `frame-ancestors`. This is a source-code grep, not a live HTTP-header inspection.
+
+It then computes a weighted score (rubric below), aggregates the top issues across the fleet, and writes the full result to KV under `latest_scan`, overwriting any previous scan.
+
+### Scoring rubric
+
+| Signal | Points |
+| --- | --- |
+| `src/worker.ts` reachable on GitHub | +30 (or +10 for any other HTTP response) |
+| Latency `< 200 / < 500 / < 1000 / < 5000` ms | +25 / +18 / +10 / +5 |
+| Size `100 B–100 KB` (or `100–200 KB`) | +15 (or +8) |
+| `vessel.json` present | +15 |
+| CSP pattern in source | +10 |
+| `X-Frame-Options` / `frame-ancestors` in source | +5 |
+| Each issue flagged | −2 |
+
+The score is clamped to `0–100`. The dashboard bands them as pass (`≥ 85`), warn (`70–84`), and fail (`< 70`).
+
+## Configuration
+
+Set these through `wrangler.toml` `[vars]` or the Cloudflare dashboard:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `VESSEL_LIST` | Hard-coded list of ~60 vessel names in `src/worker.ts` | Comma-separated fleet to scan. |
+| `PRIORITY_VESSEL_LIST` | Hard-coded list of 10 vessel names in `src/worker.ts` | Comma-separated subset for `/api/scan?priority=true`. |
+| `GITHUB_ORG` | `Lucineer` | GitHub organization or user that owns the repositories. |
+| `DOMAIN_SUFFIX` | `casey-digennaro.workers.dev` | Domain suffix used to build live vessel URLs. |
+
+The KV namespace binding `TUNER_KV` is required for `/api/scan`, `/api/scan?priority=true`, and `/api/scan/latest`. It is already declared in `wrangler.toml`.
+
+## Limitations
+
+- Only the most recent scan is kept in KV; there is no history.
+- Security checks are source-level string matches inside `src/worker.ts`, not live HTTP response header checks. There is no HSTS check.
+- Latency is measured from the single Cloudflare region where the Worker runs, not from multiple global regions.
+- The scanner reads repository files from GitHub, not the deployed Worker endpoints.
+- Fetches are anonymous and subject to GitHub's unauthenticated rate limits; frequent scans of many repositories may need a token, which the Worker does not currently pass.
+
+## License
+
+MIT — see [LICENSE](./LICENSE). Operational notes (deploy, endpoints, recovery, refactoring guardrails) are in [CLAUDE.md](./CLAUDE.md).
+
+---
+
+[The Fleet](https://the-fleet.casey-digennaro.workers.dev) · [Cocapn](https://cocapn.ai)
